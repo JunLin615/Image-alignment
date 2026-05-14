@@ -392,16 +392,28 @@ def build_registration_mask(gray_unit):
     return sitk.Cast(mask, sitk.sitkUInt8)
 
 
-def build_initial_transform(fixed_img, moving_img, fixed_mask, moving_mask):
-    size = fixed_img.GetSize()
-    center_idx = [(size[0] - 1) / 2.0, (size[1] - 1) / 2.0]
-    physical_center = fixed_img.TransformContinuousIndexToPhysicalPoint(center_idx)
+def build_initial_transform(fixed_img, moving_img, fixed_mask, moving_mask, use_moments=False):
+    if use_moments:
+        # 使用基于图像灰度重心的初始化
+        print("  [提示] 已启用重心对齐 (Moments) 作为初始位置...")
+        t = sitk.CenteredTransformInitializer(
+            fixed_img, 
+            moving_img, 
+            sitk.Euler2DTransform(), 
+            sitk.CenteredTransformInitializerFilter.MOMENTS
+        )
+        return t
+    else:
+        # 原来的默认逻辑：物理中心对齐
+        size = fixed_img.GetSize()
+        center_idx = [(size[0] - 1) / 2.0, (size[1] - 1) / 2.0]
+        physical_center = fixed_img.TransformContinuousIndexToPhysicalPoint(center_idx)
 
-    t = sitk.Euler2DTransform()
-    t.SetCenter(physical_center)
-    t.SetTranslation((0.0, 0.0))
-    t.SetAngle(0.0)
-    return t
+        t = sitk.Euler2DTransform()
+        t.SetCenter(physical_center)
+        t.SetTranslation((0.0, 0.0))
+        t.SetAngle(0.0)
+        return t
 
 
 def coarse_rotation_search(
@@ -603,8 +615,9 @@ def rgb_pair_to_shared_unit_float(img1, img2):
     return arr1_unit, arr2_unit
 
 
-def register_rigid_2d(fixed_gray, moving_gray, fixed_mask, moving_mask):
-    initial_transform = build_initial_transform(fixed_gray, moving_gray, fixed_mask, moving_mask)
+def register_rigid_2d(fixed_gray, moving_gray, fixed_mask, moving_mask, use_moments=False):
+    # 将参数传递给初始化函数
+    initial_transform = build_initial_transform(fixed_gray, moving_gray, fixed_mask, moving_mask, use_moments)
     initial_transform = coarse_rotation_search(
         fixed_gray,
         moving_gray,
@@ -737,7 +750,7 @@ def save_joint_distribution_and_clustering(
     plt.savefig(f"{base_name}_08{file_tag}_Scatter_Clustering.png", dpi=300, bbox_inches='tight')
     plt.close()
 
-def process_and_generate_all(fixed_path, moving_path, out_dir, roi_id):
+def process_and_generate_all(fixed_path, moving_path, out_dir, roi_id, use_moments=False):
     print(f"\n[{roi_id}] 开始处理，建立工作目录...")
     os.makedirs(out_dir, exist_ok=True)
     base_name = os.path.join(out_dir, f"ROI_{roi_id}")
@@ -789,6 +802,7 @@ def process_and_generate_all(fixed_path, moving_path, out_dir, roi_id):
         moving_gray_reg,
         fixed_mask,
         moving_mask,
+        use_moments=use_moments,
     )
     print(f"[{roi_id}] 配准完成，final metric = {final_metric:.6f}")
     print(f"[{roi_id}] final transform = {final_transform}")
@@ -924,7 +938,7 @@ def process_and_generate_all(fixed_path, moving_path, out_dir, roi_id):
     print(f"[{roi_id}] 所有输出生成完毕！")
 
 
-def main(data_dir):
+def main(data_dir, use_moments=False):  # 增加参数
     files = os.listdir(data_dir)
     pattern = re.compile(r"ROI (\d+) (Original|RIE)\.tiff?")
     results_root = os.path.join(data_dir, "Results_Analysis")
@@ -943,7 +957,7 @@ def main(data_dir):
     for roi_id, paths in pairs.items():
         if "Original" in paths and "RIE" in paths:
             roi_out_dir = os.path.join(results_root, f"ROI_{roi_id}")
-            process_and_generate_all(paths["Original"], paths["RIE"], roi_out_dir, roi_id)
+            process_and_generate_all(paths["Original"], paths["RIE"], roi_out_dir, roi_id, use_moments)
 
 
 if __name__ == "__main__":
@@ -959,8 +973,14 @@ if __name__ == "__main__":
         help="指定包含 ROI 图像的根目录路径"
     )
     
+    # 新增：添加重心对齐开关 (触发时为 True，不写时默认 False)
+    parser.add_argument(
+        "--use_moments", 
+        action="store_true", 
+        help="如果图像初始平移偏差较大，使用此参数启用基于重心的初始对齐"
+    )
     # 解析命令行输入的参数
     args = parser.parse_args()
     
     # 将解析到的路径传给 main 函数
-    main(args.data_dir)
+    main(args.data_dir, args.use_moments)
